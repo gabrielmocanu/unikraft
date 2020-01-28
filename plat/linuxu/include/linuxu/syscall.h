@@ -39,6 +39,7 @@
 #include <linuxu/time.h>
 #include <sys/types.h>
 #include <linuxu/signal.h>
+#include <linuxu/stat.h>
 
 #if defined __X86_64__
 #include <linuxu/syscall-x86_64.h>
@@ -47,6 +48,13 @@
 #else
 #error "Unsupported architecture"
 #endif
+
+
+static inline int sys_open(const char *pathname, int flags, mode_t mode)
+{
+	return (int)syscall3(__SC_OPEN, (long)pathname, (long)flags,
+			     (long)mode);
+}
 
 static inline ssize_t sys_read(int fd, const char *buf, size_t len)
 {
@@ -62,6 +70,17 @@ static inline ssize_t sys_write(int fd, const char *buf, size_t len)
 				  (long) (fd),
 				  (long) (buf),
 				  (long) (len));
+}
+
+static inline ssize_t sys_close(int fd)
+{
+  return (ssize_t) syscall1(__SC_CLOSE,
+          (long) (fd));
+}
+
+static inline int sys_fstat(int fd, struct k_stat *statbuf)
+{
+	return (int)syscall2(__SC_FSTAT, (long)(fd), (long)(statbuf));
 }
 
 static inline int sys_exit(int status)
@@ -81,6 +100,7 @@ static inline int sys_clock_gettime(k_clockid_t clk_id, struct k_timespec *tp)
  * Please note that on failure sys_mmap() is returning -errno
  */
 #define MAP_SHARED    (0x01)
+#define MAP_PRIVATE   (0x02)
 #define MAP_ANONYMOUS (0x20)
 #define PROT_NONE     (0x0)
 #define PROT_READ     (0x1)
