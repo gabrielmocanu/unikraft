@@ -1,0 +1,4 @@
+config LIBUKCPIO
+  bool "ukcpio: CPIO archive extraction"
+  depends on LIBVFSCORE
+  default n
