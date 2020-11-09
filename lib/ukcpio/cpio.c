@@ -31,14 +31,15 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
  */
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
+#include <stdint.h>
 
+#include <uk/assert.h>
+#include <uk/print.h>
 #include <uk/cpio.h>
 #include <uk/essentials.h>
 #include <sys/mount.h>
@@ -46,8 +47,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#define CPIO_MAGIC_NEWC "070701"
-#define CPIO_MAGIC_CRC "070702"
+#define UKCPIO_MAGIC_NEWC "070701"
+#define UKCPIO_MAGIC_CRC "070702"
 #define FILE_TYPE_MASK 0170000
 #define DIRECTORY_BITS 040000
 #define FILE_BITS 0100000
@@ -58,7 +59,11 @@
 #define IS_FILE(mode) IS_FILE_OF_TYPE((mode), (FILE_BITS))
 #define IS_DIR(mode) IS_FILE_OF_TYPE((mode), (DIRECTORY_BITS))
 
-#define GET_MODE(hdr) ((mode_t)strhex8_to_u32((hdr)->mode))
+
+#define s8hex_to_u32(buf) ((uint32_t) snhex_to_int((buf), 8))
+#define GET_MODE(hdr) ((mode_t)s8hex_to_u32((hdr)->mode))
+
+#define filename(header) ((const char *)header + sizeof(struct cpio_header))
 
 struct cpio_header {
 	char magic[6];
@@ -77,10 +82,10 @@ struct cpio_header {
 	char chksum[8];
 };
 
-static bool valid_magic(struct cpio_header *header)
+static int valid_magic(struct cpio_header *header)
 {
-	return memcmp(header->magic, CPIO_MAGIC_NEWC, 6) == 0
-	       || memcmp(header->magic, CPIO_MAGIC_CRC, 6) == 0;
+	return memcmp(header->magic, UKCPIO_MAGIC_NEWC, 6) == 0
+	       || memcmp(header->magic, UKCPIO_MAGIC_CRC, 6) == 0;
 }
 
 /* Function to convert len digits of hexadecimal string loc
@@ -88,105 +93,127 @@ static bool valid_magic(struct cpio_header *header)
  * Returns the converted unsigned integer value on success.
  * Returns 0 on error.
  */
-static unsigned int snhex_to_int(size_t len, char *loc)
+static unsigned int snhex_to_int(const char *buf, size_t count)
 {
-	int val = 0;
+	unsigned int val = 0;
 	size_t i;
 
-	for (i = 0; i < len; i++) {
+  UK_ASSERT(buf);
+
+	for (i = 0; i < count; i++) {
 		val *= 16;
-		if (*(loc + i) >= '0' && *(loc + i) <= '9')
-			val += (*(loc + i) - '0');
-		else if (*(loc + i) >= 'A' && *(loc + i) <= 'F')
-			val += (*(loc + i) - 'A') + 10;
-		else if (*(loc + i) >= 'a' && *(loc + i) <= 'f')
-			val += (*(loc + i) - 'a') + 10;
+		if (buf[i] >= '0' && buf[i] <= '9')
+			val += (buf[i] - '0');
+		else if (buf[i] >= 'A' && buf[i] <= 'F')
+			val += (buf[i] - 'A') + 10;
+		else if (buf[i] >= 'a' && buf[i] <= 'f')
+			val += (buf[i] - 'a') + 10;
 		else
 			return 0;
 	}
 	return val;
 }
 
-static uint32_t strhex8_to_u32(char *loc)
+static char *absolute_path(const char *prefix,const char *path)
 {
-	return snhex_to_int(8, loc);
-}
+  int add_slash;
+  size_t prefix_len;
+  size_t path_len;
+  size_t abs_path_len;
+  char *abs_path;
 
-static inline char *filename(struct cpio_header *header)
-{
-	return (char *)header + sizeof(struct cpio_header);
-}
+  UK_ASSERT(prefix);
+  UK_ASSERT(path);
 
-static char *absolute_path(char *path_to_prepend, char *path)
-{
-	int dir_slash_included =
-	    *(path_to_prepend + strlen(path_to_prepend) - 1) == '/' ? 1 : 2;
-	char *abs_path = (char *)malloc(strlen(path) + strlen(path_to_prepend)
-					+ dir_slash_included);
+  prefix_len = strlen(prefix);
+  path_len = strlen(path);
+
+  add_slash = prefix[prefix_len - 1] == '/' ? 0 : 1;
+  abs_path_len = prefix_len + add_slash + path_len + 1;
+
+  abs_path = malloc(abs_path_len);
+
 	if (abs_path == NULL)
 		return NULL;
-	memcpy(abs_path, path_to_prepend, strlen(path_to_prepend));
-	if (dir_slash_included == 2)
-		*(abs_path + strlen(path_to_prepend)) = '/';
-	memcpy(abs_path + strlen(path_to_prepend) + dir_slash_included - 1,
-	       path, strlen(path));
-	*(abs_path + strlen(path) + strlen(path_to_prepend) + dir_slash_included
-	  - 1) = '\0';
+
+	memcpy(abs_path, prefix, prefix_len);
+	if (add_slash)
+		abs_path[prefix_len] = '/';
+  memcpy(&abs_path[prefix_len + add_slash], path, path_len);
+
+  abs_path[abs_path_len - 1] = '\0';
 	return abs_path;
 }
 
-static enum cpio_error read_section(struct cpio_header **header_ptr,
-				    char *mount_loc, uintptr_t last)
+static enum ukcpio_error read_section(struct cpio_header **header_ptr,
+				    const char *dest, uintptr_t last)
 {
-	if (strcmp(filename(*header_ptr), "TRAILER!!!") == 0) {
+
+  enum ukcpio_error error = UKCPIO_SUCCESS;
+  int fd;
+  struct cpio_header *header;
+  char *path_from_root;
+  mode_t header_mode;
+  uint32_t header_filesize;
+  uint32_t header_namesize;
+  char *data_location;
+  uint32_t bytes_to_write;
+  int bytes_written;
+  struct cpio_header *next_header;
+
+  if (strcmp(filename(*header_ptr), "TRAILER!!!") == 0) {
 		*header_ptr = NULL;
-		return CPIO_SUCCESS;
+		return UKCPIO_SUCCESS;
 	}
 
 	if (!valid_magic(*header_ptr)) {
 		*header_ptr = NULL;
-		return -CPIO_INVALID_HEADER;
+		return -UKCPIO_INVALID_HEADER;
 	}
 
-	if (mount_loc == NULL) {
-		*header_ptr = NULL;
-		return -CPIO_NO_MOUNT_LOCATION;
-	}
+  UK_ASSERT(dest);
 
-	struct cpio_header *header = *header_ptr;
-	char *path_from_root = absolute_path(mount_loc, filename(header));
+	header = *header_ptr;
+	path_from_root = absolute_path(dest, filename(header));
 
 	if (path_from_root == NULL) {
 		*header_ptr = NULL;
-		return -CPIO_NOMEM;
+		error = -UKCPIO_NOMEM;
+    goto out;
 	}
-	mode_t header_mode = GET_MODE(header);
-	uint32_t header_filesize = strhex8_to_u32(header->filesize);
-	uint32_t header_namesize = strhex8_to_u32(header->namesize);
+
+	header_mode = GET_MODE(header);
+	header_filesize = s8hex_to_u32(header->filesize);
+	header_namesize = s8hex_to_u32(header->namesize);
 
 	if ((uintptr_t)header + sizeof(struct cpio_header) > last) {
 		*header_ptr = NULL;
-		return -CPIO_MALFORMED_FILE;
+    error = -UKCPIO_MALFORMED_FILE;
+    goto out;
 	}
+
 	if (IS_FILE(header_mode) && header_filesize != 0) {
-		uk_pr_debug("Creating file %s...\n", path_from_root);
-		int fd = open(path_from_root, O_CREAT | O_RDWR);
+		uk_pr_info("Extracting %s...\n", path_from_root);
+		fd = open(path_from_root, O_CREAT | O_RDWR);
 
 		if (fd < 0) {
 			*header_ptr = NULL;
-			return -CPIO_FILE_CREATE_FAILED;
+			error = -UKCPIO_FILE_CREATE_FAILED;
+      goto out;
 		}
-		uk_pr_debug("File %s created\n", path_from_root);
-		char *data_location = (char *)ALIGN_4(
+
+		data_location = (char *)ALIGN_4(
 		    (char *)(header) + sizeof(struct cpio_header)
 		    + header_namesize);
 
 		if ((uintptr_t)data_location + header_filesize > last) {
 			*header_ptr = NULL;
-			return -CPIO_MALFORMED_FILE;
+			error = -UKCPIO_MALFORMED_FILE;
+      goto out;
 		}
-		uint32_t bytes_to_write = header_filesize;
-		int bytes_written = 0;
+
+		bytes_to_write = header_filesize;
+		bytes_written = 0;
 
 		while (bytes_to_write > 0) {
 			if ((bytes_written =
@@ -194,46 +221,57 @@ static enum cpio_error read_section(struct cpio_header **header_ptr,
 				       bytes_to_write))
 			    < 0) {
 				*header_ptr = NULL;
-				return -CPIO_FILE_WRITE_FAILED;
+				error = -UKCPIO_FILE_WRITE_FAILED;
+        goto out;
 			}
 			bytes_to_write -= bytes_written;
 		}
+
 		if (chmod(path_from_root, header_mode & 0777) < 0)
-			uk_pr_info("chmod on file %s failed\n", path_from_root);
+			uk_pr_err("Failed to chmod %s\n", path_from_root);
+
 		if (close(fd) < 0) {
 			*header_ptr = NULL;
-			return -CPIO_FILE_CLOSE_FAILED;
+			error = -UKCPIO_FILE_CLOSE_FAILED;
+      goto out;
 		}
 	} else if (IS_DIR(header_mode)) {
+		uk_pr_info("Extracting %s...\n", path_from_root);
 		if (strcmp(".", filename(header)) != 0
 		    && mkdir(path_from_root, header_mode & 0777) < 0) {
 			*header_ptr = NULL;
-			return -CPIO_MKDIR_FAILED;
+			error = -UKCPIO_MKDIR_FAILED;
+      goto out;
 		}
 	}
-	free(path_from_root);
-	struct cpio_header *next_header = (struct cpio_header *)ALIGN_4(
+
+  next_header = (struct cpio_header *)ALIGN_4(
 	    (char *)header + sizeof(struct cpio_header) + header_namesize);
 
 	next_header = (struct cpio_header *)ALIGN_4((char *)next_header
 						    + header_filesize);
+
 	*header_ptr = next_header;
-	return CPIO_SUCCESS;
+	
+  out:
+    free(path_from_root);
+    return error;
 }
 
-enum cpio_error cpio_extract(char *mount_loc, void *memory_region, size_t len)
+enum ukcpio_error ukcpio_extract(const char *dest, void *buf, size_t buflen)
 {
-	enum cpio_error error = CPIO_SUCCESS;
-	struct cpio_header *header = (struct cpio_header *)(memory_region);
+	enum ukcpio_error error = UKCPIO_SUCCESS;
+	struct cpio_header *header = (struct cpio_header *)(buf);
 	struct cpio_header **header_ptr = &header;
 	uintptr_t end = (uintptr_t)header;
 
-	if (mount_loc == NULL)
-		return -CPIO_NO_MOUNT_LOCATION;
+	if (dest == NULL)
+		return -UKCPIO_NODEST;
 
-	while (error == CPIO_SUCCESS && header != NULL) {
-		error = read_section(header_ptr, mount_loc, end + len);
+	while (!error && header) {
+		error = read_section(header_ptr, dest, end + buflen);
 		header = *header_ptr;
 	}
+
 	return error;
 }
