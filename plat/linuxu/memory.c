@@ -42,18 +42,14 @@
 #include <uk/plat/memory.h>
 #include <uk/libparam.h>
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 #define MB2B (1024 * 1024)
 
 static __u32 heap_size = CONFIG_LINUXU_DEFAULT_HEAPMB;
 UK_LIB_PARAM(heap_size, __u32);
 
-static const char *initrd_file = NULL;
-UK_LIB_PARAM_STR(initrd_file);
+static const char *initrd = NULL;
+UK_LIB_PARAM_STR(initrd);
 
 static int __linuxu_plat_heap_init(void)
 {
@@ -71,7 +67,7 @@ static int __linuxu_plat_heap_init(void)
 		if (PTRISERR(pret)) {
 			rc = PTR2ERR(pret);
 			uk_pr_err("Failed to allocate memory for heap: %d\n",
-				  rc);
+				   rc);
 		} else
 			_liblinuxuplat_opts.heap.base = pret;
 	}
@@ -83,16 +79,16 @@ static int __linuxu_plat_initrd_init(void)
 {
 	void *pret;
 	int rc = 0;
-	struct stat file_info;
+	struct k_stat file_info;
 
-	if (initrd_file == NULL) {
+	if (initrd == NULL) {
 		uk_pr_debug("No initrd present.\n");
 	} else {
-		uk_pr_debug("Mapping in initrd file: %s\n", initrd_file);
-		int initrd_fd = sys_open(initrd_file, O_RDONLY, 0);
+		uk_pr_debug("Mapping in initrd file: %s\n", initrd);
+		int initrd_fd = sys_open(initrd, K_O_RDONLY, 0);
 
 		if (initrd_fd < 0) {
-			uk_pr_err("Failed to open intrd file");
+			uk_pr_crit("Failed to open %s for initrd\n", initrd);
 			return -1;
 		}
 
@@ -100,8 +96,8 @@ static int __linuxu_plat_initrd_init(void)
 		 * Find initrd file size
 		 */
 		if (sys_fstat(initrd_fd, &file_info) < 0) {
-			uk_pr_err("sys_fstat failed for initrd file");
-			close(initrd_fd);
+			uk_pr_crit("sys_fstat failed for initrd file\n");
+			sys_close(initrd_fd);
 			return -1;
 		}
 		_liblinuxuplat_opts.initrd.len = file_info.st_size;
@@ -109,22 +105,21 @@ static int __linuxu_plat_initrd_init(void)
 		 * Allocate initrd memory
 		 */
 		if (_liblinuxuplat_opts.initrd.len > 0) {
-			pret = sys_mmap((void *)_liblinuxuplat_opts.heap.len,
+			pret = sys_mmap(NULL,
 					_liblinuxuplat_opts.initrd.len,
 					PROT_READ | PROT_WRITE | PROT_EXEC,
 					MAP_PRIVATE, initrd_fd, 0);
 			if (PTRISERR(pret)) {
 				rc = PTR2ERR(pret);
-				uk_pr_err("Failed to allocate memory for initrd: %d\n",
-					  rc);
-				close(initrd_fd);
+				uk_pr_crit("Failed to memory-map initrd: %d\n", rc);
+				sys_close(initrd_fd);
 				return -1;
 			}
 			_liblinuxuplat_opts.initrd.base = pret;
 		} else {
-			uk_pr_err("Empty initrd file given.\n");
-			close(initrd_fd);
-			return -1;
+			uk_pr_info("Ignoring empty initrd file.\n");
+			sys_close(initrd_fd);
+			return 0;
 		}
 	}
 	return rc;
@@ -160,11 +155,11 @@ int ukplat_memregion_get(int i, struct ukplat_memregion_desc *m)
 	UK_ASSERT(m);
 
 	if (i == 0 && _liblinuxuplat_opts.heap.base) {
-		m->base = _liblinuxuplat_opts.heap.base;
-		m->len = _liblinuxuplat_opts.heap.len;
+		m->base  = _liblinuxuplat_opts.heap.base;
+		m->len   = _liblinuxuplat_opts.heap.len;
 		m->flags = UKPLAT_MEMRF_ALLOCATABLE;
 #if CONFIG_UKPLAT_MEMRNAME
-		m->name = "heap";
+		m->name  = "heap";
 #endif
 		ret = 0;
 	} else if ((i == 0 && !_liblinuxuplat_opts.heap.base
@@ -180,11 +175,11 @@ int ukplat_memregion_get(int i, struct ukplat_memregion_desc *m)
 		ret = 0;
 	} else {
 		/* invalid memory region index or no heap allocated */
-		m->base = __NULL;
-		m->len = 0;
+		m->base  = __NULL;
+		m->len   = 0;
 		m->flags = 0x0;
 #if CONFIG_UKPLAT_MEMRNAME
-		m->name = __NULL;
+		m->name  = __NULL;
 #endif
 		ret = -1;
 	}
