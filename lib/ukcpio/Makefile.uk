@@ -1,0 +1,7 @@
+$(eval $(call addlib_s,libukcpio,$(CONFIG_LIBUKCPIO)))
+
+# LIBUKCPIO_CFLAGS-$(call gcc_version_ge,8,0) += -Wno-cast-function-type
+
+CINCLUDES-$(CONFIG_LIBUKCPIO) += -I$(LIBUKCPIO_BASE)/include
+CXXINCLUDES-$(CONFIG_LIBUKCPIO) += -I$(LIBUKCPIO_BASE)/include
+LIBUKCPIO_SRCS-y += $(LIBUKCPIO_BASE)/cpio.c

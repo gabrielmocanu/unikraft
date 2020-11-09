@@ -31,27 +31,38 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
  */
 
-#ifndef __CPIO_H__
-#define __CPIO_H__
-#include <uk/plat/memory.h>
+#ifndef __UK_CPIO_H__
+#define __UK_CPIO_H__
 
-enum cpio_error {
-	CPIO_SUCCESS = 0,
-	CPIO_INVALID_HEADER,
-	CPIO_FILE_CREATE_FAILED,
-	CPIO_FILE_WRITE_FAILED,
-	CPIO_FILE_CHMOD_FAILED,
-	CPIO_FILE_CLOSE_FAILED,
-	CPIO_MKDIR_FAILED,
-	CPIO_MOUNT_FAILED,
-	CPIO_NO_MEMREGION,
-	CPIO_MALFORMED_FILE,
-	CPIO_NOMEM,
-	CPIO_NO_MOUNT_LOCATION
+#ifdef __cplusplus
+extern C {
+#endif /* __cplusplus */
+
+
+/**
+ * Include also the case of unsupported headers
+ */
+
+enum ukcpio_error {
+	UKCPIO_SUCCESS = 0,
+	UKCPIO_INVALID_HEADER,
+	UKCPIO_FILE_CREATE_FAILED,
+	UKCPIO_FILE_WRITE_FAILED,
+	UKCPIO_FILE_CHMOD_FAILED,
+	UKCPIO_FILE_CLOSE_FAILED,
+	UKCPIO_MKDIR_FAILED,
+	UKCPIO_MALFORMED_FILE,
+	UKCPIO_NOMEM,
+	UKCPIO_NODEST,
+  UKCPIO_MOUNT_FAILED
 };
 
-enum cpio_error cpio_extract(char *loc, void *mem, size_t len);
+enum ukcpio_error ukcpio_extract(const char *dest, void *buf, size_t buflen);
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
 #endif /*__CPIO_H__*/
