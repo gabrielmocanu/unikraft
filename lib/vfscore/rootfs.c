@@ -85,32 +85,33 @@ static int vfscore_rootfs(void)
 		return -1;
 	}
 
-#ifdef CONFIG_LIBINITRAMFS
-	struct ukplat_memregion_desc memregion_desc;
-	int initrd;
-	enum cpio_error error;
+#if CONFIG_LIBUKCPIO && CONFIG_LIBRAMFS
+	if (strncmp(rootfs, "initrd", 5) == 0) {
+		struct ukplat_memregion_desc initrd;
+		enum ukcpio_error error;
 
-	initrd = ukplat_memregion_find_initrd0(&memregion_desc);
-	if (initrd != -1) {
-		ukplat_memregion_get(initrd, &memregion_desc);
-		if (mount("", "/", "ramfs", 0, NULL) < 0)
-			return -CPIO_MOUNT_FAILED;
+		if (ukplat_memregion_find_initrd0(&initrd) < 0){
+			uk_pr_crit("Could not find an initrd!\n");
+			return -1;
+		}
 
-		error =
-		    cpio_extract("/", memregion_desc.base, memregion_desc.len);
-		if (error < 0)
-			uk_pr_err("Failed to mount initrd\n");
-		return error;
-	}
-	uk_pr_err("Failed to mount initrd\n");
-	return -CPIO_NO_MEMREGION;
-#else
-	uk_pr_info("Mount %s to /...\n", rootfs);
-	if (mount(rootdev, "/", rootfs, rootflags, rootopts) != 0) {
-		uk_pr_crit("Failed to mount /: %d\n", errno);
-		return -1;
+		if (mount("", "/", "ramfs", 0, NULL) != 0) {
+			uk_pr_crit("Failed to mount ramfs to /: %d\n",
+				   errno);
+			return -1;
+		}
+
+		error = ukcpio_extract("/", initrd.base, initrd.len);
+		if (error < 0) {
+			uk_pr_crit("Failed to extract cpio archive to /: %d\n",
+				   error);
+			return -1;
+		}
+
+		return 0;
 	}
 #endif
+
 	return 0;
 }
 
