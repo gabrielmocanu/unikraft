@@ -39,6 +39,7 @@
 #include <linuxu/time.h>
 #include <sys/types.h>
 #include <linuxu/signal.h>
+#include <linuxu/stat.h>
 
 #if defined __X86_64__
 #include <linuxu/syscall-x86_64.h>
@@ -71,9 +72,13 @@ static inline ssize_t sys_write(int fd, const char *buf, size_t len)
 				  (long) (len));
 }
 
-struct stat;
+static inline ssize_t sys_close(int fd)
+{
+  return (ssize_t) syscall1(__SC_CLOSE,
+          (long) (fd));
+}
 
-static inline int sys_fstat(int fd, struct stat *statbuf)
+static inline int sys_fstat(int fd, struct k_stat *statbuf)
 {
 	return (int)syscall2(__SC_FSTAT, (long)(fd), (long)(statbuf));
 }
